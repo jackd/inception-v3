@@ -26,16 +26,23 @@ class InceptionV3Estimator(learn.BaseEstimator):
               stride,
               padding,
               training):
-        normalizer_params = {
-            'is_training': training,
-            'scale': False,
-            'decay': 0.99
-        }
-        return tf.contrib.layers.conv2d(
+        scale = False
+        momentum = 0.99
+        x = tf.layers.conv2d(
             inputs, num_outputs, kernel_size, stride, padding,
-            activation_fn=tf.nn.relu,
-            normalizer_fn=tf.contrib.layers.batch_norm,
-            normalizer_params=normalizer_params)
+            activation=tf.nn.relu)
+        return tf.layers.batch_normalization(
+            x, training=training, scale=scale, momentum=momentum)
+        # normalizer_params = {
+        #     'is_training': training,
+        #     'scale': scale,
+        #     'decay': momentum,
+        # }
+        # return tf.contrib.layers.conv2d(
+        #     inputs, num_outputs, kernel_size, stride, padding,
+        #     activation_fn=tf.nn.relu,
+        #     normalizer_fn=tf.contrib.layers.batch_norm,
+        #     normalizer_params=normalizer_params)
 
     def _max_pool(self, inputs, kernel_size, stride, padding):
         return tf.layers.max_pooling2d(inputs, kernel_size, stride, padding)
@@ -291,6 +298,14 @@ class InceptionV3Estimator(learn.BaseEstimator):
         if len(labels.get_shape()) != 1:
             raise ValueError('labels must be 1D')
 
+    def _get_loss(self, logits, labels):
+        with tf.name_scope('loss'):
+            loss = tf.reduce_sum(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(
+                    labels=labels, logits=logits, name='cross_entroy'),
+                name='loss')
+        return loss
+
     def _get_train_ops(self, features, labels):
         """
         Get training ops.
@@ -306,10 +321,23 @@ class InceptionV3Estimator(learn.BaseEstimator):
         images = features
         self._check_images(images)
         self._check_labels(labels)
-        raise NotImplementedError()
-        predictions = None
-        loss = None
-        train_op = None
+        logits = self.get_logits(images, True)
+        loss = self._get_loss(logits, labels)
+
+        tf.summary.scalar('loss', loss)
+
+        steps = tf.get_collection(tf.GraphKeys.GLOBAL_STEP)
+        if len(steps) == 1:
+            step = steps[0]
+        else:
+            raise Exception('Multiple global steps disallowed')
+
+        with tf.name_scope('train_op_generation'):
+            # train_op = tf.contrib.layers.optimize_loss(
+            #     loss, step, self.learning_rate, self.optimizer)
+            train_op = tf.train.AdamOptimizer().minimize(loss, step)
+
+        predictions = tf.nn.softmax(logits)
         return learn.ModelFnOps(
             learn.ModeKeys.TRAIN,
             predictions=predictions, loss=loss, train_op=train_op)
